@@ -464,7 +464,7 @@ class Server(metaclass=ABCMeta):
         decryptor = AES.new(key, AES.MODE_CBC, iv)
         decrypted = decryptor.decrypt(_enc_message[16:])
 
-        message = unpad(decrypted)
+        message = unpad(decrypted, block_size)
         message = message.decode('utf-8')
 
         return message
