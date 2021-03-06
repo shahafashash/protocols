@@ -3,6 +3,7 @@ from socket import socket, AF_INET, SOCK_STREAM
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_OAEP, AES
 from Crypto.Signature.pkcs1_15 import PKCS115_SigScheme
+from Crypto.Util.Padding import pad, unpad
 from hashlib import sha512
 from pathlib import Path
 from secrets import token_bytes
@@ -423,35 +424,31 @@ class Server(metaclass=ABCMeta):
         with key_file_obj.open('wb') as f:
             f.write(key.export_key())
 
-    def aes_pad_message(self, message: bytes, block_size=256) -> bytes:
-        valid_sizes = [128, 192, 256]
-        if block_size not in valid_sizes:
-            raise ValueError(f'Key size is not valid: {block_size}')
-
-        padding_size = block_size - len(message) % block_size
-        padded_msg = message + padding_size * chr(padding_size)
-        return padded_msg
-
-    def aes_upad_message(self, padded_msg: bytes) -> bytes:
-        message = padded_msg[:-ord(padded_msg[len(padded_msg)-1:])]
-        return message
-
     def aes_generate_iv(self) -> bytes:
         iv = token_bytes(16)
         return iv
+    
+    def aes_generate_key(self, password, block_size=256) -> bytes:
+        valid_sizes = [128, 192, 256]
+        if block_size not in valid_sizes:
+            raise ValueError(f'Block size is not valid: {block_size}')
+        
+        key = sha512(password.encode('utf-8')).hexdigest()[:(block_size//8)]
+        key = key.encode('utf-8')
+        return key
 
     def aes_encrypt_message(self, message: str, key: bytes, iv: bytes, block_size=256) -> bytes:
         valid_sizes = [128, 192, 256]
         if block_size not in valid_sizes:
-            raise ValueError(f'Key size is not valid: {block_size}')
+            raise ValueError(f'Block size is not valid: {block_size}')
         elif len(iv) != 16:
             raise ValueError(f'Invalid IV size: {len(iv)}bytes')
 
-        msg = self.aes_pad_message(message, block_size=block_size)
-        msg = msg.encode('utf-8')
+        msg = message.encode('utf-8')
+        padded_message = pad(msg, block_size)
 
         encryptor = AES.new(key, AES.MODE_CBC, iv)
-        encrypted = encryptor.encrypt(msg)
+        encrypted = encryptor.encrypt(padded_message)
         
         enc_message = b64encode(iv + encrypted)
         return enc_message
@@ -459,7 +456,7 @@ class Server(metaclass=ABCMeta):
     def aes_decrypt_message(self, enc_message: bytes, key: bytes, block_size=256) -> str:
         valid_sizes = [128, 192, 256]
         if block_size not in valid_sizes:
-            raise ValueError(f'Key size is not valid: {block_size}')
+            raise ValueError(f'Block size is not valid: {block_size}')
 
         _enc_message = b64decode(enc_message)
         iv = _enc_message[:16]
@@ -467,7 +464,7 @@ class Server(metaclass=ABCMeta):
         decryptor = AES.new(key, AES.MODE_CBC, iv)
         decrypted = decryptor.decrypt(_enc_message[16:])
 
-        message = self.aes_upad_message(decrypted)
+        message = unpad(decrypted)
         message = message.decode('utf-8')
 
         return message
