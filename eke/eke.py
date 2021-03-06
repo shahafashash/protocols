@@ -145,8 +145,6 @@ class EKEServer(Server):
 
         return True
         
-        self.send_message(message.decode('utf-8'))
-
         
 
 
