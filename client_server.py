@@ -213,6 +213,98 @@ class Client(metaclass=ABCMeta):
         with key_file_obj.open('wb') as f:
             f.write(key.export_key())
 
+    def aes_generate_iv(self) -> bytes:
+        """Generates random 16 bytes initialization vector (IV)
+
+        Returns:
+            bytes: Initialization vector
+        """
+        iv = token_bytes(16)
+        return iv
+    
+    def aes_generate_key(self, seed: str, block_size=256) -> bytes:
+        """Generates AES key from a given seed with default block size of 256 bits.
+        Key size is being determined by the 'block_size' variable.
+
+        Args:
+            seed (str): String to generate a key from
+            block_size (int, optional): Key size in bits (128, 192 or 256). Defaults to 256.
+
+        Raises:
+            ValueError: If block size is not valid
+
+        Returns:
+            bytes: AES key with size 'block_size'
+        """
+        valid_sizes = [128, 192, 256]
+        if block_size not in valid_sizes:
+            raise ValueError(f'Block size is not valid: {block_size}')
+        
+        key = sha512(seed.encode('utf-8')).hexdigest()[:(block_size//8)]
+        key = key.encode('utf-8')
+        return key
+
+    def aes_encrypt_message(self, message: str, key: bytes, iv: bytes, block_size=256) -> bytes:
+        """Encrypts the given message using AES in CBC mode and the given key and IV.
+
+        Args:
+            message (str): Message to encrypt
+            key (bytes): AES key
+            iv (bytes): 16 bytes initialization vetor
+            block_size (int, optional): Block size in bits (128, 192 or 256). Defaults to 256.
+
+        Raises:
+            ValueError: If block size is not valid
+            ValueError: If IV is not 16 bytes
+
+        Returns:
+            bytes: Encrypted message and IV
+        """
+        valid_sizes = [128, 192, 256]
+        if block_size not in valid_sizes:
+            raise ValueError(f'Block size is not valid: {block_size}')
+        elif len(iv) != 16:
+            raise ValueError(f'Invalid IV size: {len(iv)}bytes')
+
+        msg = message.encode('utf-8')
+        padded_message = pad(msg, block_size)
+
+        encryptor = AES.new(key, AES.MODE_CBC, iv)
+        encrypted = encryptor.encrypt(padded_message)
+        
+        enc_message = b64encode(iv + encrypted)
+        return enc_message
+
+    def aes_decrypt_message(self, enc_message: bytes, key: bytes, block_size=256) -> str:
+        """Decrypts the given message using AES in CBC mode and the given key and IV.
+
+        Args:
+            enc_message (bytes): Message to decrypt
+            key (bytes): AES key
+            block_size (int, optional): Block size in bits (128, 192 or 256). Defaults to 256.
+
+        Raises:
+            ValueError: If block size is not valid
+
+        Returns:
+            str: Decrypted message
+        """
+        valid_sizes = [128, 192, 256]
+        if block_size not in valid_sizes:
+            raise ValueError(f'Block size is not valid: {block_size}')
+
+        _enc_message = b64decode(enc_message)
+        iv = _enc_message[:16]
+
+        decryptor = AES.new(key, AES.MODE_CBC, iv)
+        decrypted = decryptor.decrypt(_enc_message[16:])
+
+        message = unpad(decrypted, block_size)
+        message = message.decode('utf-8')
+
+        return message
+
+
 class Server(metaclass=ABCMeta):
     def __init__(self, host='127.0.0.1', port=1234) -> None:
         """Instantiate a server object
@@ -425,19 +517,52 @@ class Server(metaclass=ABCMeta):
             f.write(key.export_key())
 
     def aes_generate_iv(self) -> bytes:
+        """Generates random 16 bytes initialization vector (IV)
+
+        Returns:
+            bytes: Initialization vector
+        """
         iv = token_bytes(16)
         return iv
     
-    def aes_generate_key(self, password, block_size=256) -> bytes:
+    def aes_generate_key(self, seed: str, block_size=256) -> bytes:
+        """Generates AES key from a given seed with default block size of 256 bits.
+        Key size is being determined by the 'block_size' variable.
+
+        Args:
+            seed (str): String to generate a key from
+            block_size (int, optional): Key size in bits (128, 192 or 256). Defaults to 256.
+
+        Raises:
+            ValueError: If block size is not valid
+
+        Returns:
+            bytes: AES key with size 'block_size'
+        """
         valid_sizes = [128, 192, 256]
         if block_size not in valid_sizes:
             raise ValueError(f'Block size is not valid: {block_size}')
         
-        key = sha512(password.encode('utf-8')).hexdigest()[:(block_size//8)]
+        key = sha512(seed.encode('utf-8')).hexdigest()[:(block_size//8)]
         key = key.encode('utf-8')
         return key
 
     def aes_encrypt_message(self, message: str, key: bytes, iv: bytes, block_size=256) -> bytes:
+        """Encrypts the given message using AES in CBC mode and the given key and IV.
+
+        Args:
+            message (str): Message to encrypt
+            key (bytes): AES key
+            iv (bytes): 16 bytes initialization vetor
+            block_size (int, optional): Block size in bits (128, 192 or 256). Defaults to 256.
+
+        Raises:
+            ValueError: If block size is not valid
+            ValueError: If IV is not 16 bytes
+
+        Returns:
+            bytes: Encrypted message and IV
+        """
         valid_sizes = [128, 192, 256]
         if block_size not in valid_sizes:
             raise ValueError(f'Block size is not valid: {block_size}')
@@ -454,6 +579,19 @@ class Server(metaclass=ABCMeta):
         return enc_message
 
     def aes_decrypt_message(self, enc_message: bytes, key: bytes, block_size=256) -> str:
+        """Decrypts the given message using AES in CBC mode and the given key and IV.
+
+        Args:
+            enc_message (bytes): Message to decrypt
+            key (bytes): AES key
+            block_size (int, optional): Block size in bits (128, 192 or 256). Defaults to 256.
+
+        Raises:
+            ValueError: If block size is not valid
+
+        Returns:
+            str: Decrypted message
+        """
         valid_sizes = [128, 192, 256]
         if block_size not in valid_sizes:
             raise ValueError(f'Block size is not valid: {block_size}')

@@ -33,16 +33,15 @@ from hashlib import sha512
 
 
 
-class EKEServer(Server):
+class EKEServer(Server, DiffieHellman):
     def __init__(self, host='127.0.0.1', port=1234, group=14, block_size=256) -> None:
-        super().__init__(host=host, port=port)
+        super(EKEServer, self).__init__(host=host, port=port, group=group)
         
         valid_sizes = [128, 192, 256]
         if block_size not in valid_sizes:
             raise ValueError(f'Block size is not valid: {block_size}')
 
         self.__group = group
-        self.__dh = DiffieHellman(group=group)
 
         # read the users file
         self.__filename = './users.ini'
@@ -99,15 +98,15 @@ class EKEServer(Server):
     def _get_shared_dhkey(self, message: bytes, key: bytes) -> bytes:
         enc_message = message[self.__offset:]
         client_pub_key = int(self.aes_decrypt_message(enc_message, key, block_size=self.__block_size))
-        shared_dhkey = self.__dh.generate_shared_dhkey(client_pub_key)[:(self.__block_size//8)].encode('utf-8')
+        shared_dhkey = self.generate_shared_dhkey(client_pub_key)[:(self.__block_size//8)].encode('utf-8')
         return shared_dhkey
 
-    def generate_first_response(self, message: bytes) -> bytes:
+    def generate_first_handshake_response(self, message: bytes) -> bytes:
         key = self._get_client_key(message)
         shared_dhkey = self._get_shared_dhkey(message, key)
         iv = self.aes_generate_iv()
 
-        pub_key_str = str(self.__dh.public_key)
+        pub_key_str = str(self.public_key)
         enc_pub_key = self.aes_encrypt_message(pub_key_str, key, iv)
         challenge_str = str(self.__challenge)
         enc_challenge = self.aes_encrypt_message(challenge_str, shared_dhkey, iv)
@@ -124,7 +123,7 @@ class EKEServer(Server):
         
         return client_challenge
 
-    def generate_second_response(self, challenge: bytes, key: bytes) -> bytes:
+    def generate_second_handshake_response(self, challenge: bytes, key: bytes) -> bytes:
         challenge_str = str(challenge)
         iv = self.aes_generate_iv()
         enc_challenge = self.aes_encrypt_message(challenge_str, key, iv)
@@ -133,19 +132,50 @@ class EKEServer(Server):
     def do_handshake(self) -> bool:
         message = self.recieve_message()
         
-        response = self.generate_first_response(message)
+        response = self.generate_first_handshake_response(message)
         message = self.recieve_message()
 
         challenge = self.validate_response(self, message)
         if challenge == None:
             return False
 
-        response = self.generate_second_response(self, challenge)
+        response = self.generate_second_handshake_response(self, challenge)
         self.send_message(response)
 
         return True
         
+
+class EKEClient(Client, DiffieHellman):
+    def __init__(self, group=14, block_size=256) -> None:
+        super(EKEClient, self).__init__(group=group)
         
+        valid_sizes = [128, 192, 256]
+        if block_size not in valid_sizes:
+            raise ValueError(f'Block size is not valid: {block_size}')
+        
+        self.__username = input('Username: ')
+        self.__block_size = block_size
+
+    def generate_first_handshake_message(self) -> bytes:
+        pub_key_str = str(self.public_key)
+        key = self.aes_generate_key(pub_key_str, block_size=self.__block_size)
+        iv = self.aes_generate_iv()
+
+        enc_pub_key = self.aes_encrypt_message(pub_key_str, key, iv)
+        message = str(self.__username.encode('utf-8') + enc_pub_key)
+        return message
+
+    def do_handshake(self) -> bool:
+        """Hook function - Handshake before establishing a connection
+
+        Returns:
+            bool: 'True' if handshake established successfully and 'False' if not
+        """
+        message = self.generate_first_handshake_message()
+        self.send_message(message)
+
+        response = self.recieve_message()
+        # TODO: Finish the handshake...
 
 
 if __name__ == '__main__':
