@@ -34,7 +34,26 @@ from hashlib import sha512
 
 
 class EKEServer(Server, DiffieHellman):
+    """Class to represent the server side of the protocol"""
     def __init__(self, host='127.0.0.1', port=1234, group=14, block_size=256) -> None:
+        """Instantiate the client's side of the protocol
+
+        Args:
+            host (str, optional): IP or URL address of the server. Defaults to '127.0.0.1'.
+            port (int, optional): Port the server will listen to. Defaults to 1234.
+            group (int, optional): Group of the prime number. Defaults to 14.
+                                   Groups:
+                                        5  - 1536bit prime
+                                        14 - 2048bit prime
+                                        15 - 3072bit prime
+                                        16 - 4096bit prime
+                                        17 - 6144bit prime
+                                        18 - 8192bit prime
+            block_size (int, optional): Messages block size in bits (128, 192 or 256). Defaults to 256.
+
+        Raises:
+            ValueError: If block size or group are not valid
+        """
         super(EKEServer, self).__init__(host=host, port=port, group=group)
         
         valid_sizes = [128, 192, 256]
@@ -52,7 +71,68 @@ class EKEServer(Server, DiffieHellman):
         self.__offset = self._calculate_offset()
         self.__challenge = token_hex(16)
 
+    @property
+    def group(self) -> int:
+        """Returns the group from which the Diffie-Hellman keys will be generated
+
+        Returns:
+            int: Group
+        """
+        return self.__filename
+    
+    @property
+    def filename(self) -> str:
+        """Returns the name of the users file
+
+        Returns:
+            str: The name of the users file
+        """
+        return self.__filename
+
+    @property
+    def config(self) -> ConfigParser:
+        """Returns the users file object
+
+        Returns:
+            ConfigParser: User file object
+        """
+        return self.__config
+
+    @property
+    def challenge(self) -> bytes:
+        """Returns the servers challenge
+
+        Returns:
+            bytes: Servers challenge
+        """
+        return self.__challenge
+
+    @property
+    def block_size(self) -> int:
+        """Returns the block size of the messages the server 
+        expects to recive (size in bits)
+
+        Returns:
+            int: Block size (128bit, 192bit or 256bit)
+        """
+        return self.__block_size
+
+    @property
+    def offset(self) -> int:
+        """Returns the offset from where the message begins in the
+        response recived from the user in the handshake process
+
+        Returns:
+            int: Offset
+        """
+        return self.__offset
+
     def _calculate_offset(self) -> int:
+        """Calculates the offset based on the block size
+
+        Returns:
+            int: Offset
+        """
         offsets = {
             5: {
                 128: 704,
@@ -90,56 +170,107 @@ class EKEServer(Server, DiffieHellman):
         return offset
 
     def _get_client_key(self, message: bytes) -> bytes:
+        """Derives client key from his password 
+
+        Args:
+            message (bytes): First message of the handshake process (username + Ew(client public key))
+
+        Returns:
+            bytes: Clients key
+        """
         username = message[:-self.__offset].decode('utf-8')
         password = self.__config[username].get('password')
         key = sha512(password.encode('utf-8')).hexdigest()[:(self.__block_size//8)]
         return key
 
     def _get_shared_dhkey(self, message: bytes, key: bytes) -> bytes:
+        """Decrypts clients public key and calculates shared Diffie-Hellman key
+
+        Args:
+            message (bytes): First message of the handshake process (username + Ew(client public key))
+            key (bytes): Clients key
+
+        Returns:
+            bytes: Shared Diffie-Hellman key
+        """
         enc_message = message[self.__offset:]
         client_pub_key = int(self.aes_decrypt_message(enc_message, key, block_size=self.__block_size))
         shared_dhkey = self.generate_shared_dhkey(client_pub_key)[:(self.__block_size//8)].encode('utf-8')
         return shared_dhkey
 
     def generate_first_handshake_response(self, message: bytes) -> bytes:
+        """Generates the first message the server sends in the handshake process
+
+        Args:
+            message (bytes): First message recived from the client in the handshake process (username + Ew(client public key))
+
+        Returns:
+            bytes: Servers response to clients first message
+        """
         key = self._get_client_key(message)
         shared_dhkey = self._get_shared_dhkey(message, key)
         iv = self.aes_generate_iv()
 
         pub_key_str = str(self.public_key)
-        enc_pub_key = self.aes_encrypt_message(pub_key_str, key, iv)
+        enc_pub_key = self.aes_encrypt_message(pub_key_str, key, iv, block_size=self.__block_size)
         challenge_str = str(self.__challenge)
-        enc_challenge = self.aes_encrypt_message(challenge_str, shared_dhkey, iv)
+        enc_challenge = self.aes_encrypt_message(challenge_str, shared_dhkey, iv, block_size=self.__block_size)
         message = (enc_pub_key + enc_challenge).decode('utf-8')
-        return message
+        return message, shared_dhkey
 
-    def validate_response(self, response: bytes) -> bytes:
-        offset = len(response) // 2
-        challenge = response[offset:]
+    def validate_response(self, response: bytes, key: bytes) -> bytes:
+        """Validates clients response to see if recived the same challenge that 
+        was sent by the server, encrypted with the same shared Diffie-Hellman key
+
+        Args:
+            response (bytes): Clients response
+            key (bytes): Shared Diffie-Hellman key
+
+        Returns:
+            bytes: Returns the clients challenge if validation passed, 'None' if not
+        """
+        challenges = self.aes_decrypt_message(response, key, block_size=self.__block_size)
+        offset = len(challenges) // 2
+        challenge = challenges[offset:]
         if challenge == self.__challenge:
-            client_challenge = response[:offset]
+            client_challenge = challenges[:offset]
         else:
             client_challenge = None
         
         return client_challenge
 
     def generate_second_handshake_response(self, challenge: bytes, key: bytes) -> bytes:
+        """Encrypts clients challenge with the shared Diffie-Hellman key
+
+        Args:
+            challenge (bytes): Clients challenge
+            key (bytes): Shared Diffie-Hellman key
+
+        Returns:
+            bytes: [description]
+        """
         challenge_str = str(challenge)
         iv = self.aes_generate_iv()
-        enc_challenge = self.aes_encrypt_message(challenge_str, key, iv)
+        enc_challenge = self.aes_encrypt_message(challenge_str, key, iv, block_size=self.__block_size)
         return enc_challenge
 
     def do_handshake(self) -> bool:
+        """Hook function - Handshake before establishing a connection
+
+        Returns:
+            bool: 'True' if connection established successfully and 'False' if not 
+        """
         message = self.recieve_message()
         
-        response = self.generate_first_handshake_response(message)
+        response, shared_dhkey = self.generate_first_handshake_response(message)
+        self.send_message(response)
+       
         message = self.recieve_message()
-
-        challenge = self.validate_response(self, message)
+        challenge = self.validate_response(self, message, shared_dhkey)
         if challenge == None:
             return False
 
-        response = self.generate_second_handshake_response(self, challenge)
+        response = self.generate_second_handshake_response(self, challenge, shared_dhkey)
         self.send_message(response)
 
         return True
@@ -161,7 +292,7 @@ class EKEClient(Client, DiffieHellman):
         key = self.aes_generate_key(pub_key_str, block_size=self.__block_size)
         iv = self.aes_generate_iv()
 
-        enc_pub_key = self.aes_encrypt_message(pub_key_str, key, iv)
+        enc_pub_key = self.aes_encrypt_message(pub_key_str, key, iv, block_size=self.__block_size)
         message = str(self.__username.encode('utf-8') + enc_pub_key)
         return message
 
